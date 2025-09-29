@@ -1,0 +1,62 @@
+From 2c97ca2f114b56b6bc12c9d4969011148bcb571b Mon Sep 17 00:00:00 2001
+From: CuriousNom <aryanbiswas7585@gmail.com>
+Date: Sun, 14 Sep 2025 12:49:08 +0530
+Subject: [PATCH] Preserve user rotation on lockscreen when auto rotate
+ disabled
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+By default, when auto-rotate is disabled, the lockscreen ignores the
+last user-selected orientation and falls back to portrait. This is
+problematic tor tablet users, if the device was last used in landscape,
+the lockscreen still appear in portrait after the screen turns off
+and back on.
+
+This change updates DisplayRotation to restore the user’s locked
+rotation (mUserRotation) whenever the keyguard is showing and
+auto-rotate is disabled. As a result, the lockscreen now remembers the
+last orientation across screen off/on, without affecting normal app rotation.
+
+Change-Id: Ieb66e25bbcafb1fc61088bf993d0a0a36754c4f8
+---
+ .../android/server/wm/DisplayRotation.java    | 20 ++++++++++++++++---
+ 1 file changed, 17 insertions(+), 3 deletions(-)
+
+diff --git a/services/core/java/com/android/server/wm/DisplayRotation.java b/services/core/java/com/android/server/wm/DisplayRotation.java
+index d359013..218f10b 100644
+--- a/services/core/java/com/android/server/wm/DisplayRotation.java
++++ b/services/core/java/com/android/server/wm/DisplayRotation.java
+@@ -576,12 +576,26 @@ public class DisplayRotation {
+         final int lastOrientation = mLastOrientation;
+         @Surface.Rotation
+         int rotation = rotationForOrientation(lastOrientation, oldRotation);
+-        // Use the saved rotation for tabletop mode, if set.
+-        if (mFoldController != null && mFoldController.shouldRevertOverriddenRotation()) {
++        // Check auto rotate and keyguard state
++        boolean autoRotateEnabled = Settings.System.getIntForUser(
++                mContext.getContentResolver(),
++                Settings.System.ACCELEROMETER_ROTATION, 0,
++                UserHandle.USER_CURRENT) != 0;
++        boolean isKeyguardShowing = mDisplayContent.mWmService.mPolicy.isKeyguardShowingAndNotOccluded();
++
++        // Preserve user rotation when keyguard is actively showing & auto rotate disabled
++        // This prevents the override from persisting after unlock
++        if (!autoRotateEnabled && isKeyguardShowing) {
++            rotation = mUserRotation;
++            ProtoLog.v(WM_DEBUG_ORIENTATION,
++                    "Preserving lockscreen rotation: %s (%d)",
++                    Surface.rotationToString(rotation), rotation);
++        } else if (mFoldController != null && mFoldController.shouldRevertOverriddenRotation()) {
++            // Handle fold controller case separately to avoid conflicts
+             int prevRotation = rotation;
+             rotation = mFoldController.revertOverriddenRotation();
+             ProtoLog.v(WM_DEBUG_ORIENTATION,
+-                    "Reverting orientation. Rotating to %s from %s rather than %s.",
++                    "Reverting fold orientation. Rotating to %s from %s rather than %s.",
+                     Surface.rotationToString(rotation),
+                     Surface.rotationToString(oldRotation),
+                     Surface.rotationToString(prevRotation));
+-- 
+2.51.0
+
